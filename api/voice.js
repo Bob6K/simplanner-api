@@ -1,4 +1,4 @@
-import OpenAI from "openai";
+import OpenAI, { toFile } from "openai";
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
@@ -46,7 +46,8 @@ export default async function handler(req, res) {
   // Whisper transcription
   let transcript;
   try {
-    const audioFile = new File([audioBuffer], "audio.m4a", { type: "audio/m4a" });
+    // toFile is the SDK-recommended way to pass a buffer — works on Node 18 + 20
+    const audioFile = await toFile(audioBuffer, "audio.m4a", { type: "audio/m4a" });
     const whisperRes = await openai.audio.transcriptions.create({
       model: "whisper-1",
       file: audioFile,
