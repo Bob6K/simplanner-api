@@ -15,7 +15,7 @@ DAY — "this morning/afternoon/tonight" → "today" | "next Monday" → "monday
 TIME — "morning/early/breakfast" → "morning" | "afternoon/lunch/noon/midday" → "midday" | "evening/after work/after dinner" → "evening" | "night/tonight/before bed/late" → "night" | not mentioned → "morning"
 DURATION — "an hour/1 hour" → 60 | "half hour/30 min" → 30 | "45 min" → 45 | "quick/briefly/short" → 15 | "2 hours" → 120 | "all morning/afternoon" → 90 | not mentioned → null
 MULTIPLE — "gym and reading" or "gym then reading" → two separate blocks, one per activity
-ACTIVITY — keep as spoken, lowercase (e.g. "morning run" not just "run")`;
+ACTIVITY — extract the core activity name, strip filler words like "going to", "doing some", "a bit of", "heading to". Examples: "going to the gym" → "gym", "doing some reading" → "reading", "heading to the office" → "office", "morning run" → "morning run", "team meeting" → "team meeting"`;
 
 export default async function handler(req, res) {
   if (req.method !== "POST") {
