@@ -77,5 +77,13 @@ export default async function handler(req, res) {
     return res.status(502).json({ error: "Parsing failed. Please try again.", detail: err.message });
   }
 
+  // Structured log — readable by `vercel logs` for prompt tuning
+  console.log(JSON.stringify({
+    type: "voice_parse",
+    ts:   new Date().toISOString(),
+    transcript,
+    blocks
+  }));
+
   return res.status(200).json({ transcript, blocks });
 }
