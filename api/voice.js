@@ -8,7 +8,11 @@ Schema: { "blocks": [ { "day": string, "timePart": string, "activityHint": strin
 
 day values: "today" | "tomorrow" | "monday" | "tuesday" | "wednesday" | "thursday" | "friday" | "saturday" | "sunday"
 timePart values: "morning" | "midday" | "evening" | "night"
-iconHint: an SF Symbols icon name that best represents the activity (e.g. "figure.run", "book.fill", "fork.knife", "dumbbell.fill", "laptopcomputer", "brain.head.profile", "music.note", "heart.fill")
+iconHint: a VALID iOS 17 SF Symbol name. Use ONLY names from this verified list — never invent names:
+  Sports/fitness: figure.run, figure.walk, figure.hiking, figure.pool.swim, figure.tennis, figure.basketball, figure.soccer, figure.skiing.downhill, figure.golf, figure.rowing, figure.surfing, figure.martial.arts, figure.strengthtraining.traditional, figure.mind.and.body, figure.cooldown, figure.dance, bicycle, dumbbell, sportscourt.fill, heart.fill
+  Work/mind: briefcase.fill, laptopcomputer, brain, pencil, envelope.fill, person.2.fill, chart.bar.fill, text.document
+  Lifestyle: flame.fill, fork.knife, cup.and.saucer.fill, cart.fill, tv.fill, music.note, gamecontroller.fill, camera.fill, bed.double.fill, sparkles, book.fill, paintbrush.fill
+  When unsure: use sportscourt.fill for sports, figure.walk for movement, sparkles for lifestyle/wellness, briefcase.fill for work
 
 Smart inference rules:
 DAY — "this morning/afternoon/tonight" → "today" | "next Monday" → "monday" | day not mentioned → "today"
