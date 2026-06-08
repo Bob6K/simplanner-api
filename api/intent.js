@@ -112,7 +112,7 @@ TIMER duration (for startTimer):
 - "30 seconds" → 30
 
 # Recurring requests
-If the user says "every day" / "every evening" / "every Tuesday" / "always X" for an `addBlock`:
+If the user says "every day" / "every evening" / "every Tuesday" / "always X" for an addBlock:
 - v1 has no recurring-block tool. Pick the closest single-day instance (today / tomorrow / next match).
 - Set confidence: "low" so the iOS app routes the parse into an editable form.
 - The summary MUST hint at the limitation, e.g. "Just adds today — recurring not supported yet".
