@@ -1,6 +1,19 @@
 import OpenAI, { toFile } from "openai";
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// Lazy-init so a missing OPENAI_API_KEY env var doesn't crash module load
+// (which would surface as Vercel FUNCTION_INVOCATION_FAILED 500 on every
+// request — including GETs that should return 405 — making it impossible
+// to tell from the outside whether the function code is even broken).
+let _openai;
+function getOpenAI() {
+  if (!_openai) {
+    if (!process.env.OPENAI_API_KEY) {
+      throw new Error("OPENAI_API_KEY is not set in this environment.");
+    }
+    _openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  }
+  return _openai;
+}
 
 /**
  * /api/intent — universal intent parser for Simplanner's Action Button.
@@ -201,7 +214,7 @@ export default async function handler(req, res) {
     }
     try {
       const audioFile = await toFile(audioBuffer, "audio.m4a", { type: "audio/m4a" });
-      const whisperRes = await openai.audio.transcriptions.create({
+      const whisperRes = await getOpenAI().audio.transcriptions.create({
         model: "whisper-1",
         file: audioFile,
       });
@@ -224,7 +237,7 @@ export default async function handler(req, res) {
   // Tool-calling completion
   let tool, args, summary, confidence;
   try {
-    const chatRes = await openai.chat.completions.create({
+    const chatRes = await getOpenAI().chat.completions.create({
       model: MODEL,
       tools: TOOLS,
       tool_choice: "required",
