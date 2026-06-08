@@ -121,6 +121,16 @@ If the user says "every day" / "every evening" / "every Tuesday" / "always X" fo
 Every tool call MUST include:
 - summary: a human-readable single-line description shown to the user before execution (e.g. "Add 30 min reading — tomorrow morning")
 - confidence: "high" if the parse is unambiguous, "medium" if there's some inference, "low" if you're guessing or recurrence isn't supported
+- assumptions: array of arg names you INFERRED rather than took from the user's words. Examples:
+    "Gym this evening" → assumptions: ["durationMinutes"]  (no duration was said)
+    "Add reading" → assumptions: ["day", "timePart", "durationMinutes"]
+    "Add 30 minute reading block tomorrow morning" → assumptions: []  (everything stated)
+  Only include arg names you actually inferred. NEVER include "activity", "name", "rawTranscript", "summary", "confidence", "assumptions", "clarificationsNeeded".
+- clarificationsNeeded: subset of assumptions where YOU specifically want the user to confirm before committing.
+  Use sparingly. Include only when the inference is risky (e.g. the user was vague about WHEN or HOW LONG).
+  Examples:
+    "Remind me about the dentist later" → clarificationsNeeded: ["timePart", "durationMinutes"]
+    "Gym this evening" → clarificationsNeeded: []  (duration was assumed but 30 min is a fine default)
 
 Strip filler words from activity names: "going to the gym" → "gym", "doing some reading" → "reading".`;
 
@@ -138,10 +148,12 @@ const TOOLS = [
           timePart:        { type: "string", enum: ["morning","midday","evening","night"] },
           durationMinutes: { type: "integer", minimum: 1, maximum: 480 },
           routineName:     { type: "string", description: "Optional — if the user named a routine like 'Morning Ritual'." },
-          summary:         { type: "string" },
-          confidence:      { type: "string", enum: ["high","medium","low"] },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
         },
-        required: ["activity","day","timePart","durationMinutes","summary","confidence"],
+        required: ["activity","day","timePart","durationMinutes","summary","confidence","assumptions","clarificationsNeeded"],
         additionalProperties: false,
       },
     },
@@ -164,10 +176,12 @@ const TOOLS = [
           name:      { type: "string", description: "Short label like 'Bell', 'Morning gong', 'Stand up'." },
           soundId:   { type: "string", enum: ["synth_bell","synth_bowl","synth_ping"], description: "Optional — only set if user explicitly named the sound." },
           pingCount: { type: "integer", minimum: 1, maximum: 3, description: "Optional — number of strikes; default 1." },
-          summary:   { type: "string" },
-          confidence:{ type: "string", enum: ["high","medium","low"] },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" } },
+          clarificationsNeeded:  { type: "array", items: { type: "string" } },
         },
-        required: ["hour","minute","weekdays","name","summary","confidence"],
+        required: ["hour","minute","weekdays","name","summary","confidence","assumptions","clarificationsNeeded"],
         additionalProperties: false,
       },
     },
@@ -185,10 +199,12 @@ const TOOLS = [
           prepSeconds:     { type: "integer", minimum: 0, maximum: 60, description: "Lead-in countdown before the timer starts. 0 = no prep." },
           soundId:         { type: "string", enum: ["synth_bell","synth_bowl","synth_ping"] },
           endSoundId:      { type: "string", enum: ["synth_bell","synth_bowl","synth_ping"] },
-          summary:         { type: "string" },
-          confidence:      { type: "string", enum: ["high","medium","low"] },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
         },
-        required: ["durationSeconds","summary","confidence"],
+        required: ["durationSeconds","summary","confidence","assumptions","clarificationsNeeded"],
         additionalProperties: false,
       },
     },
@@ -246,7 +262,7 @@ export default async function handler(req, res) {
       : "";
 
   // Tool-calling completion
-  let tool, args, summary, confidence;
+  let tool, args, summary, confidence, assumptions, clarificationsNeeded;
   try {
     const chatRes = await getOpenAI().chat.completions.create({
       model: MODEL,
@@ -266,11 +282,15 @@ export default async function handler(req, res) {
     }
     tool = toolCall.function.name;
     const parsed = JSON.parse(toolCall.function.arguments);
-    summary    = parsed.summary;
-    confidence = parsed.confidence;
+    summary              = parsed.summary;
+    confidence           = parsed.confidence;
+    assumptions          = Array.isArray(parsed.assumptions) ? parsed.assumptions : [];
+    clarificationsNeeded = Array.isArray(parsed.clarificationsNeeded) ? parsed.clarificationsNeeded : [];
     args = { ...parsed };
     delete args.summary;
     delete args.confidence;
+    delete args.assumptions;
+    delete args.clarificationsNeeded;
   } catch (err) {
     console.error("Intent parse error:", err);
     return res.status(502).json({ error: "Parsing failed. Please try again.", detail: err.message });
@@ -288,6 +308,8 @@ export default async function handler(req, res) {
     args,
     confidence,
     summary,
+    assumptions,
+    clarificationsNeeded,
   }));
 
   return res.status(200).json({
@@ -296,5 +318,7 @@ export default async function handler(req, res) {
     summary,
     confidence,
     rawTranscript: transcript,
+    assumptions,
+    clarificationsNeeded,
   });
 }
