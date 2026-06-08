@@ -114,8 +114,15 @@ TIMER duration (for startTimer):
 # Recurring requests
 If the user says "every day" / "every evening" / "every Tuesday" / "always X" for an addBlock:
 - v1 has no recurring-block tool. Pick the closest single-day instance (today / tomorrow / next match).
-- Set confidence: "low" so the iOS app routes the parse into an editable form.
-- The summary MUST hint at the limitation, e.g. "Just adds today — recurring not supported yet".
+- Set confidence: "low".
+- The summary MUST be honest about what will actually happen, e.g.:
+    "Add 30 min running on Monday only (recurring not yet supported)"
+    Not just the user's original phrasing. Bob will see this summary and decide if it's OK.
+
+# Timer prep countdown default
+For startTimer: if the user does NOT mention a countdown / prep / lead-in, default prepSeconds to 5 (a short lead-in helps the user put the phone down). Add "prepSeconds" to assumptions.
+If the user says "no countdown" / "start immediately" / "right away" → prepSeconds: 0 (and DO NOT add to assumptions).
+If the user specifies a value → use it (and DO NOT add to assumptions).
 
 # Always include
 Every tool call MUST include:
@@ -213,6 +220,25 @@ const TOOLS = [
 
 const MODEL = process.env.INTENT_MODEL || "gpt-4o";
 
+/**
+ * Detect transcripts that aren't worth parsing — typically Whisper's output
+ * when fed silence or near-silence. Saves tokens AND prevents the AI from
+ * confidently parsing garbage like "you" into a "30 min you" block.
+ */
+const WHISPER_HALLUCINATIONS = new Set([
+  "you", "you.", "thanks.", "thank you.", "thank you for watching.",
+  "thanks for watching.", ".", ",", "!", "?", "uh", "um", "hmm",
+  "okay.", "ok.", "yeah.", "bye.", "bye-bye.",
+]);
+function isLikelyEmptyOrHallucination(transcript) {
+  const t = (transcript ?? "").trim();
+  if (t.length === 0) return true;
+  // Single short token, no spaces — usually a filler artefact.
+  if (!t.includes(" ") && t.length <= 4) return true;
+  if (WHISPER_HALLUCINATIONS.has(t.toLowerCase())) return true;
+  return false;
+}
+
 export default async function handler(req, res) {
   if (req.method !== "POST") {
     return res.status(405).json({ error: "Method not allowed" });
@@ -252,6 +278,22 @@ export default async function handler(req, res) {
     }
   } else {
     return res.status(400).json({ error: "Provide either 'text' (string) or 'audio' (base64 string)." });
+  }
+
+  // Reject obvious Whisper hallucinations / silence / single-word artefacts
+  // before spending tokens on the parse. Whisper often outputs filler words
+  // when fed silence: "you", "thanks for watching", ".", etc.
+  if (isLikelyEmptyOrHallucination(transcript)) {
+    console.log(JSON.stringify({
+      type: "intent_parse_rejected",
+      ts: new Date().toISOString(),
+      reason: "empty_or_hallucination",
+      transcript,
+    }));
+    return res.status(422).json({
+      error: "Didn't catch that. Try speaking again or use text input.",
+      rawTranscript: transcript,
+    });
   }
 
   // Add a tiny context preamble so the model can use it when relevant
