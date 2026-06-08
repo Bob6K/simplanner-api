@@ -52,10 +52,15 @@ Examples:
 ## createGong
 Use when the user wants to schedule a recurring bell/notification at a specific time of day.
 Examples:
-  "Bell at 9am every weekday"          → createGong(9, 0, weekdays, "Bell")
-  "Remind me at noon on weekends"      → createGong(12, 0, [saturday,sunday], "Reminder")
+  "Bell at 9am every weekday"             → createGong(9, 0, weekdays, "Bell")
+  "Remind me at noon on weekends"         → createGong(12, 0, [saturday,sunday], "Lunch")
   "Gong every day at 6:30 in the evening" → createGong(18, 30, [], "Gong")
-  "Wake me up at 7"                    → createGong(7, 0, [], "Wake up")
+  "Wake me up at 7"                       → createGong(7, 0, [], "Wake up")
+
+NAMING RULE for createGong:
+- This app has no "reminders" concept — it has gongs/bells. NEVER name a gong "Reminder".
+- If the user says "remind me at X", infer a short topical name from what they're being reminded about. If you can't tell, default to "Gong" (or "Bell" if the user mentioned "bell").
+- Examples of good names: "Stand up", "Lunch", "Water", "Walk", "Standup", "Stretch", "Bell", "Gong".
 
 ## startTimer
 Use when the user wants to start a meditation/focus timer RIGHT NOW.
@@ -106,10 +111,16 @@ TIMER duration (for startTimer):
 - "half an hour" → 1800
 - "30 seconds" → 30
 
+# Recurring requests
+If the user says "every day" / "every evening" / "every Tuesday" / "always X" for an `addBlock`:
+- v1 has no recurring-block tool. Pick the closest single-day instance (today / tomorrow / next match).
+- Set confidence: "low" so the iOS app routes the parse into an editable form.
+- The summary MUST hint at the limitation, e.g. "Just adds today — recurring not supported yet".
+
 # Always include
 Every tool call MUST include:
 - summary: a human-readable single-line description shown to the user before execution (e.g. "Add 30 min reading — tomorrow morning")
-- confidence: "high" if the parse is unambiguous, "medium" if there's some inference, "low" if you're guessing
+- confidence: "high" if the parse is unambiguous, "medium" if there's some inference, "low" if you're guessing or recurrence isn't supported
 
 Strip filler words from activity names: "going to the gym" → "gym", "doing some reading" → "reading".`;
 
