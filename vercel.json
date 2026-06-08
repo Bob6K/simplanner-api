@@ -2,6 +2,9 @@
   "functions": {
     "api/voice.js": {
       "maxDuration": 30
+    },
+    "api/intent.js": {
+      "maxDuration": 30
     }
   }
 }
