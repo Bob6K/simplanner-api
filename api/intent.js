@@ -24,7 +24,7 @@ function getOpenAI() {
  *
  * Returns:
  *   {
- *     tool:          "addBlock" | "createGong" | "startTimer",
+ *     tool:          "addBlock" | "addBlocksForDays" | "createGong" | "startTimer",
  *     args:          { ...tool-specific... },
  *     summary:       "Human one-liner",
  *     confidence:    "high" | "medium" | "low",
@@ -42,12 +42,20 @@ ALWAYS invoke a tool. Never reply in prose. If the user's intent maps to multipl
 # Tools
 
 ## addBlock
-Use when the user wants to add a planner block (a scheduled activity in a day plan).
+Use when the user wants to add a planner block (a scheduled activity in a day plan) for ONE specific day.
 Examples:
   "Add a 30 minute reading block tomorrow morning"     → addBlock(reading, tomorrow, morning, 30)
   "30 min gym this evening"                            → addBlock(gym, today, evening, 30)
   "I want to meditate for 15 minutes after work"       → addBlock(meditate, today, evening, 15)
   "Block out an hour of deep work tomorrow afternoon"  → addBlock(deep work, tomorrow, midday, 60)
+
+## addBlocksForDays
+Use when the user wants the SAME block on a FIXED SET of weekdays — e.g. "every weekday", "on Mon/Wed/Fri", "weekends", a listed group of days. Each weekday in the array produces one block on the next occurrence of that day.
+Examples:
+  "Add a 30 min walk every weekday morning"              → addBlocksForDays(walk, [monday,tuesday,wednesday,thursday,friday], morning, 30)
+  "Reading on Mon Wed Fri evenings"                      → addBlocksForDays(reading, [monday,wednesday,friday], evening, 30)
+  "Gym on weekends, an hour each"                        → addBlocksForDays(gym, [saturday,sunday], midday, 60)
+  "15 min meditation Tuesday and Thursday morning"       → addBlocksForDays(meditation, [tuesday,thursday], morning, 15)
 
 ## createGong
 Use when the user wants to schedule a recurring bell/notification at a specific time of day.
@@ -112,12 +120,15 @@ TIMER duration (for startTimer):
 - "30 seconds" → 30
 
 # Recurring requests
-If the user says "every day" / "every evening" / "every Tuesday" / "always X" for an addBlock:
-- v1 has no recurring-block tool. Pick the closest single-day instance (today / tomorrow / next match).
+Fixed-set multi-day patterns — "every weekday", "on Mon/Wed/Fri", "weekends", "Tuesday and Thursday", any explicit list of weekdays — route to addBlocksForDays. Set confidence "high" if the day set is unambiguous, "medium" if you had to interpret which days are meant.
+
+Truly recurring "forever" patterns where the user wants infinite recurrence with no fixed endpoint ("every Tuesday from now on", "always read in the evening", "every single day forever") still fall back to addBlock for the next single occurrence:
+- v1 has no infinite-recurrence tool. Pick the closest single-day instance (today / tomorrow / next match).
 - Set confidence: "low".
-- The summary MUST be honest about what will actually happen, e.g.:
+- The summary MUST be honest about the limitation, e.g.:
     "Add 30 min running on Monday only (recurring not yet supported)"
-    Not just the user's original phrasing. Bob will see this summary and decide if it's OK.
+
+Heuristic: if the user names specific days or a finite group ("every weekday", "weekends", "Mon Wed Fri") → addBlocksForDays. If the user just says "every day" / "always" / "every Tuesday" with no finite scope → addBlock single-day fallback + explain in summary.
 
 # Timer prep countdown default
 For startTimer: if the user does NOT mention a countdown / prep / lead-in, default prepSeconds to 5 (a short lead-in helps the user put the phone down). Add "prepSeconds" to assumptions.
@@ -161,6 +172,34 @@ const TOOLS = [
           clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
         },
         required: ["activity","day","timePart","durationMinutes","summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "addBlocksForDays",
+      description: "Add the same planner block on a fixed set of weekdays. Each weekday in 'days' produces one block on the next occurrence of that day.",
+      parameters: {
+        type: "object",
+        properties: {
+          activity:        { type: "string", description: "Core activity name, filler words stripped. e.g. 'gym', 'reading'." },
+          days: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", enum: ["monday","tuesday","wednesday","thursday","friday","saturday","sunday"] },
+            description: "Set of weekdays the block applies to. Must contain at least one weekday.",
+          },
+          timePart:        { type: "string", enum: ["morning","midday","evening","night"] },
+          durationMinutes: { type: "integer", minimum: 1, maximum: 480 },
+          routineName:     { type: "string", description: "Optional — if the user named a routine like 'Morning Ritual'." },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["activity","days","timePart","durationMinutes","summary","confidence","assumptions","clarificationsNeeded"],
         additionalProperties: false,
       },
     },
