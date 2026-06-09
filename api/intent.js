@@ -238,8 +238,32 @@ const PARTIAL_HALLUCINATION_FRAGMENTS = [
   "subscribe and like", "like and subscribe", "see you next time",
   "see you later", "thanks for tuning in", "don't forget to subscribe",
 ];
+// Vocabulary hint passed as Whisper's `prompt`. Keywords only — NO full
+// sentences. Whisper echoes coherent prompts back when fed silence/noise.
+const WHISPER_BIAS_PROMPT =
+  "Bell. Gong. Block. Timer. Ritual. Routine. Schedule. " +
+  "Weekday. Weekend. Morning. Afternoon. Evening. Night. " +
+  "Meditate. Breathe. Read. Walk. Gym. Minutes. Hours. " +
+  "Snooze. Today. Tomorrow. Monday. Tuesday. Wednesday. " +
+  "Thursday. Friday. Saturday. Sunday.";
+
 function normaliseTranscript(s) {
   return (s ?? "").trim().toLowerCase().replace(/[.,!?]+\s*$/g, "").trim();
+}
+
+// Catches the case where Whisper regurgitates a chunk of our bias prompt
+// itself. Real commands are short — a transcript containing a 24+ char
+// substring of the bias prompt is almost certainly an echo, since no real
+// utterance would coincidentally match that many sequential keywords.
+function isWhisperBiasEcho(transcript) {
+  const t = normaliseTranscript(transcript);
+  if (t.length < 24) return false;
+  const p = normaliseTranscript(WHISPER_BIAS_PROMPT);
+  const WINDOW = 24;
+  for (let i = 0; i + WINDOW <= p.length; i++) {
+    if (t.includes(p.slice(i, i + WINDOW))) return true;
+  }
+  return false;
 }
 function isLikelyEmptyOrHallucination(transcript) {
   const t = normaliseTranscript(transcript);
@@ -250,6 +274,8 @@ function isLikelyEmptyOrHallucination(transcript) {
   for (const frag of PARTIAL_HALLUCINATION_FRAGMENTS) {
     if (t.includes(frag)) return true;
   }
+  // Whisper regurgitated our own bias prompt — common with silence + noise.
+  if (isWhisperBiasEcho(transcript)) return true;
   // CJK / Cyrillic / Arabic content from silent audio. The app is English;
   // a transcript that is >30% non-Latin characters is almost certainly a
   // hallucinated YouTube-style prompt (e.g. Chinese "subscribe & like").
@@ -295,9 +321,12 @@ export default async function handler(req, res) {
         // Bias Whisper toward English so silence doesn't hallucinate
         // Chinese subscribe prompts / Japanese filler / etc.
         language: "en",
-        // Domain-bias prompt: tells Whisper what kind of commands to expect
-        // so silence/noise is less likely to decode as YouTuber sign-offs.
-        prompt: "User commands like: Add a 30 minute reading block tomorrow morning. Bell at 9am every weekday. Start a 10 minute timer with chimes every 5 minutes. Add the morning ritual today.",
+        // Vocabulary bias only — short keyword list, NO sentences. Whisper
+        // will regurgitate sentence-shaped prompts when fed silence/noise
+        // (observed in v1: the entire prompt came back as transcript). A
+        // bare keyword list biases toward our domain without giving Whisper
+        // something coherent to parrot.
+        prompt: WHISPER_BIAS_PROMPT,
       });
       transcript = whisperRes.text;
     } catch (err) {
