@@ -226,23 +226,38 @@ const MODEL = process.env.INTENT_MODEL || "gpt-4o";
  * confidently parsing garbage like "you" into a "30 min you" block.
  */
 const WHISPER_HALLUCINATIONS = new Set([
-  "you", "you.", "thanks.", "thank you.", "thank you for watching.",
-  "thanks for watching.", ".", ",", "!", "?", "uh", "um", "hmm",
-  "okay.", "ok.", "yeah.", "bye.", "bye-bye.",
+  "you", "thanks", "thank you", "thank you for watching",
+  "thanks for watching", "uh", "um", "hmm",
+  "okay", "ok", "yeah", "bye", "bye-bye",
 ]);
+// Substring matches for YouTuber sign-offs that Whisper hallucinates on
+// silence. These catch punctuation variants and trailing additions like
+// "Thanks for watching, see you next time!"
+const PARTIAL_HALLUCINATION_FRAGMENTS = [
+  "thanks for watching", "thank you for watching", "please subscribe",
+  "subscribe and like", "like and subscribe", "see you next time",
+  "see you later", "thanks for tuning in", "don't forget to subscribe",
+];
+function normaliseTranscript(s) {
+  return (s ?? "").trim().toLowerCase().replace(/[.,!?]+\s*$/g, "").trim();
+}
 function isLikelyEmptyOrHallucination(transcript) {
-  const t = (transcript ?? "").trim();
+  const t = normaliseTranscript(transcript);
   if (t.length === 0) return true;
   // Single short token, no spaces — usually a filler artefact.
   if (!t.includes(" ") && t.length <= 4) return true;
-  if (WHISPER_HALLUCINATIONS.has(t.toLowerCase())) return true;
+  if (WHISPER_HALLUCINATIONS.has(t)) return true;
+  for (const frag of PARTIAL_HALLUCINATION_FRAGMENTS) {
+    if (t.includes(frag)) return true;
+  }
   // CJK / Cyrillic / Arabic content from silent audio. The app is English;
   // a transcript that is >30% non-Latin characters is almost certainly a
   // hallucinated YouTube-style prompt (e.g. Chinese "subscribe & like").
-  const nonLatin = [...t].filter(c =>
+  const raw = (transcript ?? "").trim();
+  const nonLatin = [...raw].filter(c =>
     /[぀-ゟ゠-ヿ一-鿿가-힯Ѐ-ӿ؀-ۿ]/.test(c)
   ).length;
-  if (nonLatin / t.length > 0.3) return true;
+  if (raw.length > 0 && nonLatin / raw.length > 0.3) return true;
   return false;
 }
 
@@ -280,6 +295,9 @@ export default async function handler(req, res) {
         // Bias Whisper toward English so silence doesn't hallucinate
         // Chinese subscribe prompts / Japanese filler / etc.
         language: "en",
+        // Domain-bias prompt: tells Whisper what kind of commands to expect
+        // so silence/noise is less likely to decode as YouTuber sign-offs.
+        prompt: "User commands like: Add a 30 minute reading block tomorrow morning. Bell at 9am every weekday. Start a 10 minute timer with chimes every 5 minutes. Add the morning ritual today.",
       });
       transcript = whisperRes.text;
     } catch (err) {
