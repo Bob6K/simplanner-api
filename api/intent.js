@@ -24,7 +24,7 @@ function getOpenAI() {
  *
  * Returns:
  *   {
- *     tool:          "addBlock" | "addBlocksForDays" | "createGong" | "startTimer",
+ *     tool:          "addBlock" | "addBlocksForDays" | "deleteBlock" | "createGong" | "startTimer",
  *     args:          { ...tool-specific... },
  *     summary:       "Human one-liner",
  *     confidence:    "high" | "medium" | "low",
@@ -56,6 +56,17 @@ Examples:
   "Reading on Mon Wed Fri evenings"                      → addBlocksForDays(reading, [monday,wednesday,friday], evening, 30)
   "Gym on weekends, an hour each"                        → addBlocksForDays(gym, [saturday,sunday], midday, 60)
   "15 min meditation Tuesday and Thursday morning"       → addBlocksForDays(meditation, [tuesday,thursday], morning, 15)
+
+## deleteBlock
+Use when the user wants to REMOVE an existing planner block — e.g. "delete", "remove", "cancel", "drop", "scratch", or "clear". The synonym set "delete / remove / cancel / drop / scratch / clear" all map to this tool. Pass a short fuzzy hint of what the user named (filler words stripped) so iOS can match it against existing blocks.
+Examples:
+  "Delete football training tomorrow"   → deleteBlock(activityHint="football training", day=tomorrow)
+  "Remove my reading block today"       → deleteBlock(activityHint="reading", day=today)
+  "Cancel the gym on Friday"            → deleteBlock(activityHint="gym", day=friday)
+  "Drop tomorrow's morning walk"        → deleteBlock(activityHint="walk", day=tomorrow, timePart=morning)
+
+DAY (for deleteBlock): same convention as addBlock — if day is omitted, default to "today".
+TIME PART (for deleteBlock): only include the timePart field if the user explicitly named a part of day ("morning walk", "evening run"). If the user did NOT name one, OMIT it entirely (do not infer a default — iOS uses the absence to keep the search broad across the day).
 
 ## createGong
 Use when the user wants to schedule a recurring bell/notification at a specific time of day.
@@ -200,6 +211,27 @@ const TOOLS = [
           clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
         },
         required: ["activity","days","timePart","durationMinutes","summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "deleteBlock",
+      description: "Delete an existing planner block. iOS fuzzy-matches activityHint against block activity names for the resolved day.",
+      parameters: {
+        type: "object",
+        properties: {
+          activityHint:    { type: "string", description: "What the user named — for fuzzy matching against existing blocks. e.g. 'football', 'football training', 'reading'. Strip filler words." },
+          day:             { type: "string", enum: ["today","tomorrow","monday","tuesday","wednesday","thursday","friday","saturday","sunday"] },
+          timePart:        { type: "string", enum: ["morning","midday","evening","night"], description: "Optional — only include if the user explicitly named a part of day. Omit otherwise so iOS searches the whole day." },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["activityHint","day","summary","confidence","assumptions","clarificationsNeeded"],
         additionalProperties: false,
       },
     },
