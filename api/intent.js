@@ -236,6 +236,13 @@ function isLikelyEmptyOrHallucination(transcript) {
   // Single short token, no spaces — usually a filler artefact.
   if (!t.includes(" ") && t.length <= 4) return true;
   if (WHISPER_HALLUCINATIONS.has(t.toLowerCase())) return true;
+  // CJK / Cyrillic / Arabic content from silent audio. The app is English;
+  // a transcript that is >30% non-Latin characters is almost certainly a
+  // hallucinated YouTube-style prompt (e.g. Chinese "subscribe & like").
+  const nonLatin = [...t].filter(c =>
+    /[぀-ゟ゠-ヿ一-鿿가-힯Ѐ-ӿ؀-ۿ]/.test(c)
+  ).length;
+  if (nonLatin / t.length > 0.3) return true;
   return false;
 }
 
@@ -270,6 +277,9 @@ export default async function handler(req, res) {
       const whisperRes = await getOpenAI().audio.transcriptions.create({
         model: "whisper-1",
         file: audioFile,
+        // Bias Whisper toward English so silence doesn't hallucinate
+        // Chinese subscribe prompts / Japanese filler / etc.
+        language: "en",
       });
       transcript = whisperRes.text;
     } catch (err) {
