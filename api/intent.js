@@ -313,6 +313,22 @@ export default async function handler(req, res) {
     } catch {
       return res.status(400).json({ error: "Failed to decode base64 audio" });
     }
+    // Early-reject obviously-tiny payloads. A valid m4a header alone is
+    // ~100 bytes; anything below ~1 KB is silence or a broken recording
+    // (common on the iOS Simulator when the host audio HAL fails). Saves
+    // a Whisper round-trip and gives the user the friendly "didn't catch"
+    // message instead of a generic backend error.
+    if (audioBuffer.length < 1024) {
+      console.log(JSON.stringify({
+        type: "intent_parse_rejected",
+        ts: new Date().toISOString(),
+        reason: "audio_too_small",
+        bytes: audioBuffer.length,
+      }));
+      return res.status(422).json({
+        error: "Didn't catch that. Try speaking again or use text input.",
+      });
+    }
     try {
       const audioFile = await toFile(audioBuffer, "audio.m4a", { type: "audio/m4a" });
       const whisperRes = await getOpenAI().audio.transcriptions.create({
@@ -330,7 +346,28 @@ export default async function handler(req, res) {
       });
       transcript = whisperRes.text;
     } catch (err) {
+      // Whisper returns BadRequestError (HTTP 400) when the audio is
+      // malformed, too short (< 0.1 s), or otherwise undecodable. This is
+      // common on simulator builds where the host audio HAL produces broken
+      // m4a files. Map it to the same "didn't catch that" UX as silence so
+      // iOS shows a sensible message instead of a generic 502.
+      const status = err?.status ?? err?.response?.status;
+      const isBadAudio = status === 400
+        || /audio|file|format|decode|short/i.test(err?.message ?? "");
       console.error("Whisper error:", err);
+      if (isBadAudio) {
+        console.log(JSON.stringify({
+          type: "intent_parse_rejected",
+          ts: new Date().toISOString(),
+          reason: "whisper_bad_audio",
+          status,
+          message: err?.message,
+          bytes: audioBuffer.length,
+        }));
+        return res.status(422).json({
+          error: "Didn't catch that. Try speaking again or use text input.",
+        });
+      }
       return res.status(502).json({ error: "Transcription failed. Please try again.", detail: err.message });
     }
   } else {
