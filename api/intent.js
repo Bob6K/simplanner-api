@@ -24,7 +24,7 @@ function getOpenAI() {
  *
  * Returns:
  *   {
- *     tool:          "addBlock" | "addBlocksForDays" | "deleteBlock" | "markBlockDone" | "createGong" | "startTimer",
+ *     tool:          "addBlock" | "addBlocksForDays" | "deleteBlock" | "markBlockDone" | "moveBlock" | "changeBlockDuration" | "createGong" | "startTimer",
  *     args:          { ...tool-specific... },
  *     summary:       "Human one-liner",
  *     confidence:    "high" | "medium" | "low",
@@ -79,6 +79,40 @@ Examples:
 
 DAY (for markBlockDone): same convention as deleteBlock — if day is omitted, default to "today".
 TIME PART (for markBlockDone): only include the timePart field if the user explicitly named a part of day ("morning gym", "evening walk"). If the user did NOT name one, OMIT it entirely (do not infer a default — iOS uses the absence to keep the search broad across the day).
+
+## moveBlock
+Use when the user wants to MOVE/RESCHEDULE an existing planner block to a different day, a different time of day, or both — e.g. "move", "reschedule", "shift", "push", "change to", "send to". The synonym set "move / reschedule / shift / push / change to / send to" all map to this tool. Pass a short fuzzy hint of what the user named so iOS can match it against existing blocks.
+Examples:
+  "Move my reading to evening"                  → moveBlock(activityHint="reading", day=today, newTimePart=evening)
+  "Move tomorrow's gym to Friday"               → moveBlock(activityHint="gym", day=tomorrow, newDay=friday)
+  "Move walk to Friday morning"                 → moveBlock(activityHint="walk", day=today, newDay=friday, newTimePart=morning)
+  "Shift my afternoon reading to night"         → moveBlock(activityHint="reading", day=today, timePart=midday, newTimePart=night)
+  "Reschedule football training to Saturday"    → moveBlock(activityHint="football training", day=today, newDay=saturday)
+  "Push tomorrow's morning walk to the evening" → moveBlock(activityHint="walk", day=tomorrow, timePart=morning, newTimePart=evening)
+
+DAY (for moveBlock): the CURRENT day where the block lives — same convention as deleteBlock/markBlockDone. If the user did not name a current day, default to "today".
+TIME PART (for moveBlock): the CURRENT timePart, used ONLY for narrowing the source block. Include it only if the user explicitly named a current part of day (e.g. "my afternoon reading", "the morning walk"). Omit otherwise so iOS searches the whole day.
+NEW DAY (for moveBlock): the destination day. Omit entirely if the user is NOT changing the day (e.g. "move to evening" — keep the same day).
+NEW TIME PART (for moveBlock): the destination timePart. Omit entirely if the user is NOT changing the timePart (e.g. "move to Friday" with no time mentioned).
+RULE: AT LEAST ONE of newDay / newTimePart MUST be present. If the user's command implies neither (impossible no-op), pick the most likely target — if they said "move", they almost certainly meant SOMETHING; ask via clarificationsNeeded.
+
+ASSUMPTIONS for moveBlock: include "newDay" or "newTimePart" in assumptions[] only if you had to GUESS the destination (e.g. they said "move to later" → you inferred newTimePart=evening). Do NOT add "day" or "timePart" to assumptions when they're stated or correctly defaulted.
+
+## changeBlockDuration
+Use when the user wants to CHANGE THE LENGTH / DURATION of an existing planner block — e.g. "make", "change", "set", "cut", "shorten", "extend", "lengthen", "shrink". The synonym set "make / change / set / cut / shorten / extend / lengthen / shrink" all map to this tool when applied to a block's duration. Pass a short fuzzy hint of what the user named so iOS can match it against existing blocks.
+Examples:
+  "Make reading 1 hour"                       → changeBlockDuration(activityHint="reading", day=today, durationMinutes=60)
+  "Cut my gym to 20 min"                      → changeBlockDuration(activityHint="gym", day=today, durationMinutes=20)
+  "Change tomorrow's walk to 45 minutes"      → changeBlockDuration(activityHint="walk", day=tomorrow, durationMinutes=45)
+  "Set my morning meditation to 15 min"       → changeBlockDuration(activityHint="meditation", day=today, timePart=morning, durationMinutes=15)
+  "Shorten the deep work block to half hour"  → changeBlockDuration(activityHint="deep work", day=today, durationMinutes=30)
+  "Extend reading by 30 minutes"              → changeBlockDuration(activityHint="reading", day=today, durationMinutes=60)  (BEST-GUESS FINAL TOTAL — see RELATIVE DURATION rule below)
+
+DAY (for changeBlockDuration): same convention as deleteBlock — if day is omitted, default to "today".
+TIME PART (for changeBlockDuration): only include the timePart field if the user explicitly named a part of day. Omit otherwise so iOS searches the whole day.
+DURATION (for changeBlockDuration): the FINAL duration in minutes after the change. ALWAYS an absolute integer in the range 1..480 — never a delta. Phrases like "by 30 min" / "+15 min" / "another half hour" describe a DELTA the user wants applied; you must convert that to your best estimate of the final total without knowing the current duration. When you do this, ADD "durationMinutes" to assumptions[] AND add it to clarificationsNeeded so the user can correct it on the confirm sheet. State the absolute final total in the summary so the user can verify, e.g. "Set reading to 60 min" (NOT "Extended by 30 min").
+
+ASSUMPTIONS for changeBlockDuration: add "durationMinutes" to assumptions[] only when the user gave a RELATIVE duration ("by 30 min", "extend a bit") and you had to guess the final total. If the user stated an absolute value ("make it an hour", "30 minutes"), do NOT add it.
 
 ## createGong
 Use when the user wants to schedule a recurring bell/notification at a specific time of day.
@@ -265,6 +299,51 @@ const TOOLS = [
           clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
         },
         required: ["activityHint","day","summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "moveBlock",
+      description: "Move an existing planner block to a different day, a different timePart, or both. iOS fuzzy-matches activityHint against block names on the current day. At least one of newDay / newTimePart MUST be supplied.",
+      parameters: {
+        type: "object",
+        properties: {
+          activityHint: { type: "string", description: "What the user named — for fuzzy matching against existing blocks. e.g. 'reading', 'gym'. Strip filler words." },
+          day:          { type: "string", enum: ["today","tomorrow","monday","tuesday","wednesday","thursday","friday","saturday","sunday"], description: "The CURRENT day where the block lives. Default 'today' if not stated." },
+          timePart:     { type: "string", enum: ["morning","midday","evening","night"], description: "Optional — the CURRENT timePart of the block, for narrowing the source. Omit unless the user explicitly named a current part of day." },
+          newDay:       { type: "string", enum: ["today","tomorrow","monday","tuesday","wednesday","thursday","friday","saturday","sunday"], description: "Destination day. Omit if the user is not changing the day." },
+          newTimePart:  { type: "string", enum: ["morning","midday","evening","night"], description: "Destination timePart. Omit if the user is not changing the timePart." },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["activityHint","day","summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "changeBlockDuration",
+      description: "Change the duration of an existing planner block. iOS fuzzy-matches activityHint against block names on the resolved day. durationMinutes is the FINAL absolute duration (1..480).",
+      parameters: {
+        type: "object",
+        properties: {
+          activityHint:    { type: "string", description: "What the user named — for fuzzy matching against existing blocks. Strip filler words." },
+          day:             { type: "string", enum: ["today","tomorrow","monday","tuesday","wednesday","thursday","friday","saturday","sunday"], description: "Day where the block lives. Default 'today' if not stated." },
+          timePart:        { type: "string", enum: ["morning","midday","evening","night"], description: "Optional — only include if the user explicitly named a part of day, for narrowing the source. Omit otherwise so iOS searches the whole day." },
+          durationMinutes: { type: "integer", minimum: 1, maximum: 480, description: "The FINAL absolute duration after the change. Never a delta. For relative requests ('by 30 min'), supply your best-guess final total and add 'durationMinutes' to assumptions[] + clarificationsNeeded." },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["activityHint","day","durationMinutes","summary","confidence","assumptions","clarificationsNeeded"],
         additionalProperties: false,
       },
     },
