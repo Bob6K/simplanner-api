@@ -68,6 +68,14 @@ Examples:
 DAY (for deleteBlock): same convention as addBlock — if day is omitted, default to "today".
 TIME PART (for deleteBlock): only include the timePart field if the user explicitly named a part of day ("morning walk", "evening run"). If the user did NOT name one, OMIT it entirely (do not infer a default — iOS uses the absence to keep the search broad across the day).
 
+ASSUMPTIONS for deleteBlock — CRITICAL: any field you defaulted rather than took from the user's words MUST appear in the assumptions array. iOS uses this signal to widen the search (look in other days when day was assumed, or other timeParts when timePart was assumed).
+  "Delete walk"                  → day=today,    timePart omitted,  assumptions: ["day"]
+  "Delete walk today"            → day=today,    timePart omitted,  assumptions: []
+  "Delete my walk this morning"  → day=today,    timePart=morning,  assumptions: ["day"]
+  "Delete walk on Friday"        → day=friday,   timePart omitted,  assumptions: []
+  "Delete my morning walk"       → day=today,    timePart=morning,  assumptions: ["day"]
+  "Delete Friday's evening walk" → day=friday,   timePart=evening,  assumptions: []
+
 ## markBlockDone
 Use when the user wants to MARK an existing planner block as completed / done / finished — e.g. "done", "finished", "completed", "tick off", "mark as done", "complete", "check off". The synonym set "done / finished / completed / tick off / mark as done / complete / check off" all map to this tool. Pass a short fuzzy hint of what the user named (filler words stripped) so iOS can match it against existing blocks.
 Examples:
