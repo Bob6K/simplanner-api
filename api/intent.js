@@ -35,9 +35,28 @@ function getOpenAI() {
  * so we can A/B different providers later without app updates.
  */
 
-const SYSTEM_PROMPT = `You are Simplanner's action parser. The user spoke or typed a command and you must convert it into ONE structured action call by invoking exactly one tool.
+const SYSTEM_PROMPT = `You are Simplanner's action parser. The user spoke or typed a command and you must convert it into one or more structured action calls by invoking the matching tool(s). Invoke ONE tool call per distinct action — most commands are a single action, so a single tool call; split into multiple calls only when the user clearly asks for several DIFFERENT actions.
 
-ALWAYS invoke a tool. Never reply in prose. If the user's intent maps to multiple actions, pick the single most likely one and set confidence to "medium". If you genuinely cannot tell, still pick the closest tool and set confidence to "low".
+ALWAYS invoke at least one tool. Never reply in prose. If you genuinely cannot tell which tool fits, still pick the closest one and set confidence to "low".
+
+# Multiple actions in one command
+Two actions are DISTINCT only when they differ in VERB (add / addBlocksForDays / delete / move / mark done / change duration / gong / timer) OR in ACTIVITY. Differing only in DAY or TIME for the same activity+verb is NOT distinct — keep it ONE call.
+Invoke ONE tool call per distinct action. Most commands are a single action. Emit several calls only for genuinely different actions, in the order the user said them. At most 6 calls.
+
+Split (different verb or activity):
+  "Add reading tomorrow morning and gym Friday evening"                 -> addBlock(reading, ...) + addBlock(gym, ...)
+  "Add 20 min meditation today, delete the dentist block, 10 min timer" -> addBlock + deleteBlock + startTimer
+  "Move my gym to Friday and make my reading 1 hour"                    -> moveBlock(gym, ...) + changeBlockDuration(reading, 60)
+  "Delete my walk, my reading, and my gym tomorrow"                     -> deleteBlock(walk) + deleteBlock(reading) + deleteBlock(gym)
+
+Do NOT split (one action, even though it contains "and"):
+  "Walk every weekday morning"                                          -> addBlocksForDays(walk, [mon..fri], morning)  — same activity across days is ONE call; never per-day addBlock.
+  "Reading on Monday and Friday evenings"                               -> addBlocksForDays(reading, [monday,friday], evening)  — "and" joining weekdays of ONE activity stays ONE call.
+  "Start a 20 min timer with chimes every 5 min and a 10 second countdown" -> startTimer(1200, intervalSeconds=300, prepSeconds=10)  — "and" joins timer PARAMETERS, not actions.
+
+"and" splits ONLY when it joins two independent verbs/activities. It does NOT split when it joins parameters or qualifiers of one action (a timer's interval/countdown, a gong's time/sound, a block's details), and it does NOT split when it lists multiple weekdays of the SAME activity (that is one addBlocksForDays). When unsure whether "and" starts a new action or just adds detail, keep ONE call.
+Same activity on multiple days: if the days are named weekdays -> ONE addBlocksForDays (even when listed with "and"). Use multiple addBlock calls for the same activity only when a day cannot be a weekday (e.g. "today"/"tomorrow") or the duration/timePart differs per day.
+Each tool call is independent and carries its OWN summary, confidence, assumptions and clarificationsNeeded. When unsure whether something is one action or two, prefer FEWER calls.
 
 # Tools
 
@@ -214,6 +233,8 @@ Every tool call MUST include:
   Examples:
     "Remind me about the dentist later" → clarificationsNeeded: ["timePart", "durationMinutes"]
     "Gym this evening" → clarificationsNeeded: []  (duration was assumed but 30 min is a fine default)
+
+When you emit MULTIPLE tool calls, compute summary / confidence / assumptions / clarificationsNeeded SEPARATELY for each call, from only that call's own arguments — never write a combined summary on the first call and leave the others sparse.
 
 Strip filler words from activity names: "going to the gym" → "gym", "doing some reading" → "reading".`;
 
@@ -589,7 +610,7 @@ export default async function handler(req, res) {
       : "";
 
   // Tool-calling completion
-  let tool, args, summary, confidence, assumptions, clarificationsNeeded;
+  const actions = [];
   try {
     const chatRes = await getOpenAI().chat.completions.create({
       model: MODEL,
@@ -603,21 +624,46 @@ export default async function handler(req, res) {
     });
 
     const choice = chatRes.choices?.[0];
-    const toolCall = choice?.message?.tool_calls?.[0];
-    if (!toolCall) {
+    const toolCalls = choice?.message?.tool_calls ?? [];
+    if (toolCalls.length === 0) {
       return res.status(502).json({ error: "Model did not produce a tool call.", transcript });
     }
-    tool = toolCall.function.name;
-    const parsed = JSON.parse(toolCall.function.arguments);
-    summary              = parsed.summary;
-    confidence           = parsed.confidence;
-    assumptions          = Array.isArray(parsed.assumptions) ? parsed.assumptions : [];
-    clarificationsNeeded = Array.isArray(parsed.clarificationsNeeded) ? parsed.clarificationsNeeded : [];
-    args = { ...parsed };
-    delete args.summary;
-    delete args.confidence;
-    delete args.assumptions;
-    delete args.clarificationsNeeded;
+
+    // Build one action per tool call. The model uses parallel tool calling to
+    // emit several when the user asked for several distinct actions; keep them
+    // all (capped) instead of discarding tool_calls[1..]. Each call carries its
+    // own summary / confidence / assumptions / clarificationsNeeded, and we copy
+    // the shared transcript onto each so every element is a complete payload.
+    const MAX_ACTIONS = 6;
+    if (toolCalls.length > MAX_ACTIONS) {
+      console.warn(JSON.stringify({ type: "intent_actions_capped", ts: new Date().toISOString(), received: toolCalls.length, cap: MAX_ACTIONS, transcript }));
+    }
+    for (const tc of toolCalls.slice(0, MAX_ACTIONS)) {
+      let parsed;
+      try {
+        parsed = JSON.parse(tc.function.arguments);
+      } catch {
+        console.warn(JSON.stringify({ type: "intent_toolcall_unparseable", ts: new Date().toISOString(), name: tc?.function?.name, transcript }));
+        continue; // skip a malformed tool call rather than failing the whole batch
+      }
+      const callArgs = { ...parsed };
+      delete callArgs.summary;
+      delete callArgs.confidence;
+      delete callArgs.assumptions;
+      delete callArgs.clarificationsNeeded;
+      actions.push({
+        tool:                 tc.function.name,
+        args:                 callArgs,
+        summary:              parsed.summary,
+        confidence:           parsed.confidence,
+        rawTranscript:        transcript,
+        assumptions:          Array.isArray(parsed.assumptions) ? parsed.assumptions : [],
+        clarificationsNeeded: Array.isArray(parsed.clarificationsNeeded) ? parsed.clarificationsNeeded : [],
+      });
+    }
+    if (actions.length === 0) {
+      return res.status(502).json({ error: "Could not parse the model's tool call.", transcript });
+    }
   } catch (err) {
     console.error("Intent parse error:", err);
     return res.status(502).json({ error: "Parsing failed. Please try again.", detail: err.message });
@@ -631,21 +677,28 @@ export default async function handler(req, res) {
     app: app ?? "simplanner",
     model: MODEL,
     transcript,
-    tool,
-    args,
-    confidence,
-    summary,
-    assumptions,
-    clarificationsNeeded,
+    actionCount: actions.length,
+    actions: actions.map((a) => ({
+      tool:                 a.tool,
+      args:                 a.args,
+      confidence:           a.confidence,
+      summary:              a.summary,
+      assumptions:          a.assumptions,
+      clarificationsNeeded: a.clarificationsNeeded,
+    })),
   }));
 
+  const first = actions[0];
   return res.status(200).json({
-    tool,
-    args,
-    summary,
-    confidence,
+    actions,
     rawTranscript: transcript,
-    assumptions,
-    clarificationsNeeded,
+    // Backward-compat: pre-multiblock app builds read these flat top-level
+    // fields (the first action). New builds read `actions`.
+    tool:                 first.tool,
+    args:                 first.args,
+    summary:              first.summary,
+    confidence:           first.confidence,
+    assumptions:          first.assumptions,
+    clarificationsNeeded: first.clarificationsNeeded,
   });
 }
