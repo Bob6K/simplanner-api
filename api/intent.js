@@ -206,13 +206,13 @@ TIMER duration (for startTimer):
 # Recurring requests
 Fixed-set multi-day patterns — "every weekday", "on Mon/Wed/Fri", "weekends", "Tuesday and Thursday", any explicit list of weekdays — route to addBlocksForDays. Set confidence "high" if the day set is unambiguous, "medium" if you had to interpret which days are meant.
 
-Truly recurring "forever" patterns where the user wants infinite recurrence with no fixed endpoint ("every Tuesday from now on", "always read in the evening", "every single day forever") still fall back to addBlock for the next single occurrence:
-- v1 has no infinite-recurrence tool. Pick the closest single-day instance (today / tomorrow / next match).
-- Set confidence: "low".
-- The summary MUST be honest about the limitation, e.g.:
-    "Add 30 min running on Monday only (recurring not yet supported)"
+"Every day" / "daily" / "each day" / "always" → addBlocksForDays with ALL SEVEN days [monday,tuesday,wednesday,thursday,friday,saturday,sunday]. This puts the activity on every day of the current week. Confidence "high".
+  "Add 15 min meditation daily in the evening"  → addBlocksForDays(meditation, [monday,tuesday,wednesday,thursday,friday,saturday,sunday], evening, 15)
+  "Always read for an hour at night"            → addBlocksForDays(reading, [monday,tuesday,wednesday,thursday,friday,saturday,sunday], night, 60)
 
-Heuristic: if the user names specific days or a finite group ("every weekday", "weekends", "Mon Wed Fri") → addBlocksForDays. If the user just says "every day" / "always" / "every Tuesday" with no finite scope → addBlock single-day fallback + explain in summary.
+v1 schedules the CURRENT WEEK only — there is no infinite "forever" recurrence. Do not refuse or warn for "daily"/"every day"; just schedule this week's seven days as above. Only when the user explicitly stresses forever/never-ending ("from now on", "every week forever") add a short honest note in the summary, e.g. "Add 15 min meditation every day this week".
+
+Heuristic: name specific days or a finite group ("every weekday", "weekends", "Mon Wed Fri") → addBlocksForDays for those days. "Every day"/"daily"/"always" → addBlocksForDays for all seven. A single recurring weekday ("every Tuesday") → addBlocksForDays([tuesday]).
 
 # Timer prep countdown default
 For startTimer: if the user does NOT mention a countdown / prep / lead-in, default prepSeconds to 5 (a short lead-in helps the user put the phone down). Add "prepSeconds" to assumptions.
