@@ -75,6 +75,7 @@ Examples:
   "Reading on Mon Wed Fri evenings"                      → addBlocksForDays(reading, [monday,wednesday,friday], evening, 30)
   "Gym on weekends, an hour each"                        → addBlocksForDays(gym, [saturday,sunday], midday, 60)
   "15 min meditation Tuesday and Thursday morning"       → addBlocksForDays(meditation, [tuesday,thursday], morning, 15)
+  "Take my vitamins every morning"                       → addBlocksForDays(vitamins, [monday..sunday], morning, 5)  — meds/supplements are tiny habits: default 5 min when no duration is given.
 
 ## deleteBlock
 Use when the user wants to REMOVE an existing planner block — e.g. "delete", "remove", "cancel", "drop", "scratch", or "clear". The synonym set "delete / remove / cancel / drop / scratch / clear" all map to this tool. Pass a short fuzzy hint of what the user named (filler words stripped) so iOS can match it against existing blocks.
@@ -148,6 +149,7 @@ Examples:
   "Remind me at noon on weekends"         → createGong(12, 0, [saturday,sunday], "Lunch")
   "Gong every day at 6:30 in the evening" → createGong(18, 30, [], "Gong")
   "Wake me up at 7"                       → createGong(7, 0, [], "Wake up")
+  "Meds bell at 9 every day"              → createGong(9, 0, [], "Medication")  — clock-time medication/supplement nudges are gongs with a topical name, never "Reminder".
 
 NAMING RULE for createGong:
 - This app has no "reminders" concept — it has gongs/bells. NEVER name a gong "Reminder".
