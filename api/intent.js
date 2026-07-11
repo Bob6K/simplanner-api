@@ -37,7 +37,7 @@ function getOpenAI() {
 
 const SYSTEM_PROMPT = `You are Simplanner's action parser. The user spoke or typed a command and you must convert it into one or more structured action calls by invoking the matching tool(s). Invoke ONE tool call per distinct action — most commands are a single action, so a single tool call; split into multiple calls only when the user clearly asks for several DIFFERENT actions.
 
-ALWAYS invoke at least one tool. Never reply in prose. If you genuinely cannot tell which tool fits, still pick the closest one and set confidence to "low".
+ALWAYS invoke at least one tool. Never reply in prose. If the request is something the app cannot do by voice/text, invoke notSupported with an honest reason (see below) — NEVER force the nearest wrong tool. Only when the request is clearly one of the supported actions but ambiguous, pick the closest tool and set confidence to "low".
 
 # Multiple actions in one command
 Two actions are DISTINCT only when they differ in VERB (add / addBlocksForDays / delete / move / mark done / change duration / gong / timer) OR in ACTIVITY. Differing only in DAY or TIME for the same activity+verb is NOT distinct — keep it ONE call.
@@ -220,6 +220,37 @@ Heuristic: name specific days or a finite group ("every weekday", "weekends", "M
 For startTimer: if the user does NOT mention a countdown / prep / lead-in, default prepSeconds to 5 (a short lead-in helps the user put the phone down). Add "prepSeconds" to assumptions.
 If the user says "no countdown" / "start immediately" / "right away" → prepSeconds: 0 (and DO NOT add to assumptions).
 If the user specifies a value → use it (and DO NOT add to assumptions).
+
+# App concepts (management verbs)
+BLOCK = one planned activity on one day. ROUTINE (user may say "ritual") = a reusable bundle of activities; adding a named routine to a day is addBlock with routineName — NOT a management verb. SCHEDULE (user may say "template", "week plan") = a saved WEEK layout of blocks; loading stamps it onto the week and never deletes anything. BASE SCHEDULE (user may say "base", "default week", "normal week", "standard week") = the one special schedule mirroring the user's normal week; updating it REPLACES its previous contents from the current week.
+
+## copyDay
+Use when the user wants one day's blocks duplicated onto other day(s) — "copy", "duplicate", "same as".
+  "Copy today to tomorrow"              → copyDay(sourceDay: "today", targetDays: ["tomorrow"])
+  "Copy Monday to Thursday and Friday"  → copyDay("monday", ["thursday","friday"])
+  "Make the weekend look like today"    → copyDay("today", ["saturday","sunday"])
+sourceDay defaults to "today" when unstated — then ADD "sourceDay" to assumptions. Blocks already on a target day are never duplicated (the app dedups); no need to warn about it.
+
+## loadSchedule
+Use when the user wants a SAVED schedule applied to the week — "load", "apply", "put on".
+  "Load my work week schedule"  → loadSchedule(nameHint: "work week")
+  "Apply my base schedule"      → loadSchedule(nameHint: "Base Schedule")
+When they say base/default/normal/standard week, use nameHint "Base Schedule". iOS fuzzy-matches nameHint against the user's saved schedules and lets them pick on the confirm card.
+
+## saveWeekAsSchedule
+Use when the user wants the CURRENT week saved as a reusable schedule — "save this week as…", "store as template".
+  "Save this week as my study plan"  → saveWeekAsSchedule(name: "Study Plan")
+When no name is given, propose a short sensible one and add "name" to assumptions AND clarificationsNeeded.
+
+## updateBaseSchedule
+Use ONLY when the user explicitly wants their base/default/normal week saved/updated FROM the current week — "update my base schedule", "make this my default week".
+  "Make this my normal week"  → updateBaseSchedule()
+This REPLACES the base schedule's previous contents — the summary MUST say so, e.g. "Replace your Base Schedule with this week's blocks".
+
+## notSupported
+Use when the user asks for something the assistant cannot do, INSTEAD of forcing another tool. Known unsupported: creating a routine from existing blocks ("save these as a routine" → ⋯ menu → Save as Routine), editing/renaming/deleting routines, schedules, activities or categories (→ Settings), changing settings/theme/planner mode, forever-recurrence beyond the current week.
+  "Save these three blocks as a routine" → notSupported(requested: "save blocks as a routine", reason: "Creating a routine from existing blocks needs picking blocks by hand.", redirect: "Planner ⋯ menu → Save as Routine")
+Keep reason + redirect to one short sentence each, honest and specific. confidence "high" when the request is clearly unsupported.
 
 # Always include
 Every tool call MUST include:
@@ -426,6 +457,108 @@ const TOOLS = [
           clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
         },
         required: ["durationSeconds","summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "copyDay",
+      description: "Copy every block of one day onto one or more other days. The app skips blocks whose activity/routine already exists on a target day.",
+      parameters: {
+        type: "object",
+        properties: {
+          sourceDay:  { type: "string", enum: ["today","tomorrow","monday","tuesday","wednesday","thursday","friday","saturday","sunday"], description: "Day being copied FROM. Default 'today' when unstated (then add 'sourceDay' to assumptions)." },
+          targetDays: {
+            type: "array",
+            minItems: 1,
+            items: { type: "string", enum: ["today","tomorrow","monday","tuesday","wednesday","thursday","friday","saturday","sunday"] },
+            description: "Day(s) being copied TO.",
+          },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["sourceDay","targetDays","summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "loadSchedule",
+      description: "Apply a SAVED schedule (week template) onto the current week. iOS fuzzy-matches nameHint against the user's saved schedules.",
+      parameters: {
+        type: "object",
+        properties: {
+          nameHint: { type: "string", description: "The schedule name as the user said it, filler words stripped — e.g. 'work week', 'Base Schedule'." },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["nameHint","summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "saveWeekAsSchedule",
+      description: "Save the current week's blocks as a new reusable schedule with the given name.",
+      parameters: {
+        type: "object",
+        properties: {
+          name: { type: "string", description: "Name for the new schedule. Propose a short one if the user gave none (then add 'name' to assumptions + clarificationsNeeded)." },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["name","summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "updateBaseSchedule",
+      description: "Create or FULLY REPLACE the user's Base Schedule from the current week's blocks. Only for explicit base/default/normal-week requests.",
+      parameters: {
+        type: "object",
+        properties: {
+          summary:               { type: "string", description: "Must state that this replaces the Base Schedule." },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "notSupported",
+      description: "The request is something the assistant cannot do. Return an honest explanation instead of forcing another tool. The app shows an info card; nothing executes.",
+      parameters: {
+        type: "object",
+        properties: {
+          requested: { type: "string", description: "Short restatement of what the user asked for." },
+          reason:    { type: "string", description: "One honest sentence on why it isn't possible by voice/text." },
+          redirect:  { type: "string", description: "Where in the app to do it instead, e.g. 'Planner ⋯ menu → Save as Routine'. Empty string if nowhere." },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["requested","reason","redirect","summary","confidence","assumptions","clarificationsNeeded"],
         additionalProperties: false,
       },
     },
