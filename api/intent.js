@@ -24,7 +24,7 @@ function getOpenAI() {
  *
  * Returns:
  *   {
- *     tool:          "addBlock" | "addBlocksForDays" | "deleteBlock" | "markBlockDone" | "moveBlock" | "changeBlockDuration" | "createGong" | "startTimer",
+ *     tool:          "addBlock" | "addBlocksForDays" | "deleteBlock" | "markBlockDone" | "moveBlock" | "changeBlockDuration" | "createGong" | "startTimer" | "copyDay" | "loadSchedule" | "saveWeekAsSchedule" | "updateBaseSchedule" | "querySchedule" | "notSupported",
  *     args:          { ...tool-specific... },
  *     summary:       "Human one-liner",
  *     confidence:    "high" | "medium" | "low",
@@ -247,10 +247,37 @@ Use ONLY when the user explicitly wants their base/default/normal week saved/upd
   "Make this my normal week"  → updateBaseSchedule()
 This REPLACES the base schedule's previous contents — the summary MUST say so, e.g. "Replace your Base Schedule with this week's blocks".
 
+# Questions about the schedule (read-only)
+The user might ASK about their schedule instead of asking to change it. Do not confuse a question with a command: "what's on today" is a question (→ querySchedule); "add gym today" is a command (→ addBlock). A question phrased politely that still requests a CHANGE ("can you move my gym to Friday", "could you free up my evening") is a COMMAND — route it to the matching action tool (moveBlock, deleteBlock, ...), never querySchedule.
+
+## querySchedule
+Use when the user asks a QUESTION about their existing schedule — "what's on today", "what do I have Thursday", "when do I next have gym", "am I free Thursday evening". CRITICAL: this tool answers NOTHING itself. It performs no lookup and returns no schedule data — the server has no access to the user's blocks. It only classifies the question into a structured query; iOS resolves that query locally against its own on-device store and composes the real answer, so the schedule's actual contents never leave the device.
+Examples:
+  "What's on my schedule today"        → querySchedule(scope="today")
+  "What do I have going on today"      → querySchedule(scope="today")
+  "What do I have on Thursday"         → querySchedule(scope="day", day="thursday")
+  "What's on tomorrow"                 → querySchedule(scope="day", day="tomorrow")
+  "When do I next have gym"            → querySchedule(scope="nextOccurrence", activityName="gym")
+  "When's my next reading block"       → querySchedule(scope="nextOccurrence", activityName="reading")
+  "Am I free Thursday evening"         → querySchedule(scope="freeSlot", day="thursday", timePart="evening")
+  "Do I have any free time tomorrow"   → querySchedule(scope="freeSlot", day="tomorrow")
+
+SCOPE selection:
+- "today" — asking generally what's scheduled today; no other day named.
+- "day" — asking what's on a SPECIFIC named day other than an unqualified "today" (a weekday name, "tomorrow", or a calendar date like "the 24th" → resolve to an ISO date when unambiguous).
+- "nextOccurrence" — asking WHEN an activity next happens. Requires activityName.
+- "freeSlot" — asking whether a stretch of time is open/available. Requires day; timePart is optional (omit for a whole-day free check).
+DAY field: a weekday name (monday..sunday), "today"/"tomorrow", or an ISO date (YYYY-MM-DD) — NOT the closed enum used by other tools, since users may name a specific calendar date. Omit for scope "today".
+Confidence "high" when scope + fields are unambiguous, "medium" when you had to infer the day or activity, "low" when genuinely guessing.
+
 ## notSupported
-Use when the user asks for something the assistant cannot do, INSTEAD of forcing another tool. Known unsupported: creating a routine from existing blocks ("save these as a routine" → ⋯ menu → Save as Routine), editing/renaming/deleting routines, schedules, activities or categories (→ Settings), changing settings/theme/planner mode, forever-recurrence beyond the current week.
+Use when the user asks for something the assistant cannot do, INSTEAD of forcing another tool. Known unsupported: creating a routine from existing blocks ("save these as a routine" → ⋯ menu → Save as Routine), editing/renaming/deleting routines, schedules, activities or categories (→ Settings), changing settings/theme/planner mode, forever-recurrence beyond the current week, and any QUESTION the querySchedule schema cannot express — analytics/stats/history questions like "how productive was I in March", "what's my longest streak", "how many workouts did I do last month" — these stay notSupported with an honest reason; do not force querySchedule onto a question it can't structurally represent.
   "Save these three blocks as a routine" → notSupported(requested: "save blocks as a routine", reason: "Creating a routine from existing blocks needs picking blocks by hand.", redirect: "Planner ⋯ menu → Save as Routine")
+  "How productive was I in March"        → notSupported(requested: "productivity analysis for March", reason: "Voice/text can't analyze past history yet — only today's and upcoming schedule.", redirect: "Progress tab")
 Keep reason + redirect to one short sentence each, honest and specific. confidence "high" when the request is clearly unsupported.
+
+# Context hint (replanning conversations)
+If the Context appended below includes a "hint" field (e.g. "replan: mornings lapsed for Meditation"), the utterance is part of a replanning conversation ABOUT the named activity/timePart in that hint — prefer moveBlock, changeBlockDuration, or deleteBlock over addBlock, and resolve vague phrasing like "mornings aren't working" or "let's try evenings instead" as a move/adjust/delete action on that activity rather than creating a new block. Still use querySchedule if the utterance is a genuine question rather than a decision, and notSupported/addBlock etc. when the utterance clearly isn't about the hinted activity.
 
 # Always include
 Every tool call MUST include:
@@ -538,6 +565,28 @@ const TOOLS = [
           clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
         },
         required: ["summary","confidence","assumptions","clarificationsNeeded"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "querySchedule",
+      description: "Classifies a QUESTION about the user's schedule into a structured query. This tool performs NO lookup and returns NO schedule data — the server has no access to the user's blocks. iOS resolves the classification locally against its own on-device store and composes the actual answer; the user's schedule contents never leave the device.",
+      parameters: {
+        type: "object",
+        properties: {
+          scope:        { type: "string", enum: ["today","day","nextOccurrence","freeSlot"], description: "'today' = what's on today (no other day named). 'day' = what's on a specific named day (weekday/tomorrow/ISO date). 'nextOccurrence' = when an activity next happens (requires activityName). 'freeSlot' = whether a stretch of time is open (requires day)." },
+          day:          { type: "string", description: "Weekday name (monday..sunday), 'today'/'tomorrow', or an ISO date (YYYY-MM-DD) if the user named a specific calendar date. Omit for scope 'today'." },
+          activityName: { type: "string", description: "The activity/routine name the user asked about, filler words stripped, e.g. 'gym', 'reading'. Required for scope 'nextOccurrence'." },
+          timePart:     { type: "string", enum: ["morning","midday","evening","night"], description: "Optional part of day the user named, e.g. 'Thursday evening'. Used with scope 'freeSlot' or 'day'." },
+          summary:               { type: "string" },
+          confidence:            { type: "string", enum: ["high","medium","low"] },
+          assumptions:           { type: "array", items: { type: "string" }, description: "Arg names the AI inferred rather than took from the user's words." },
+          clarificationsNeeded:  { type: "array", items: { type: "string" }, description: "Subset of assumptions where the AI wants the user to review/edit before commit." },
+        },
+        required: ["scope","summary","confidence","assumptions","clarificationsNeeded"],
         additionalProperties: false,
       },
     },
