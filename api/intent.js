@@ -15,6 +15,26 @@ function getOpenAI() {
   return _openai;
 }
 
+// The intent-parse client can point at any OpenAI-compatible provider
+// (S36 model bake-off: xAI Grok via INTENT_BASE_URL=https://api.x.ai/v1 +
+// INTENT_API_KEY=$XAI_API_KEY). Deliberately SEPARATE from getOpenAI():
+// audio transcription must always hit OpenAI regardless of which provider
+// serves the chat model.
+let _intentClient;
+function getIntentClient() {
+  if (!_intentClient) {
+    const key = process.env.INTENT_API_KEY || process.env.OPENAI_API_KEY;
+    if (!key) {
+      throw new Error("No API key for the intent model (INTENT_API_KEY / OPENAI_API_KEY).");
+    }
+    _intentClient = new OpenAI({
+      apiKey: key,
+      ...(process.env.INTENT_BASE_URL ? { baseURL: process.env.INTENT_BASE_URL } : {}),
+    });
+  }
+  return _intentClient;
+}
+
 /**
  * /api/intent — universal intent parser for Simplanner's Action Button.
  *
@@ -796,7 +816,7 @@ export default async function handler(req, res) {
   // Tool-calling completion
   const actions = [];
   try {
-    const chatRes = await getOpenAI().chat.completions.create({
+    const chatRes = await getIntentClient().chat.completions.create({
       model: MODEL,
       tools: TOOLS,
       tool_choice: "required",
