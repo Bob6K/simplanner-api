@@ -634,7 +634,10 @@ const TOOLS = [
   },
 ];
 
-const MODEL = process.env.INTENT_MODEL || "gpt-4o";
+// Intent model (S37 migration, Bob's GO 2026-08-12): gpt-5.4-mini — won
+// the S36 bake-off 11/11 at ~1/10th gpt-4o's price and half its latency.
+// Env-overridable; proven fallbacks: gpt-4o, or grok-4.3 via INTENT_BASE_URL.
+const MODEL = process.env.INTENT_MODEL || "gpt-5.4-mini";
 
 // STT model (S37 migration, spec _ai/PRICING_MODEL.md): gpt-transcribe —
 // same transcriptions endpoint as whisper-1, ~half the word-error rate at
