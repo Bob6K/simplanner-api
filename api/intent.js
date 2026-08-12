@@ -18,8 +18,8 @@ function getOpenAI() {
 // The intent-parse client can point at any OpenAI-compatible provider
 // (S36 model bake-off: xAI Grok via INTENT_BASE_URL=https://api.x.ai/v1 +
 // INTENT_API_KEY=$XAI_API_KEY). Deliberately SEPARATE from getOpenAI():
-// audio transcription must always hit OpenAI regardless of which provider
-// serves the chat model.
+// audio transcription (STT_MODEL) must always hit OpenAI regardless of
+// which provider serves the chat model.
 let _intentClient;
 function getIntentClient() {
   if (!_intentClient) {
@@ -40,7 +40,7 @@ function getIntentClient() {
  *
  * Accepts EITHER:
  *   { text: "..." }                            // typed input
- *   { audio: "<base64>" , source: "voice" }    // voice — Whisper first
+ *   { audio: "<base64>" , source: "voice" }    // voice — STT first
  *
  * Returns:
  *   {
@@ -636,10 +636,19 @@ const TOOLS = [
 
 const MODEL = process.env.INTENT_MODEL || "gpt-4o";
 
+// STT model (S37 migration, spec _ai/PRICING_MODEL.md): gpt-transcribe —
+// same transcriptions endpoint as whisper-1, ~half the word-error rate at
+// $0.0045/min. Env-overridable so prod can roll back to whisper-1 without
+// a code change.
+const STT_MODEL = process.env.STT_MODEL || "gpt-transcribe";
+
 /**
- * Detect transcripts that aren't worth parsing — typically Whisper's output
- * when fed silence or near-silence. Saves tokens AND prevents the AI from
+ * Detect transcripts that aren't worth parsing — typically STT output when
+ * fed silence or near-silence. Saves tokens AND prevents the AI from
  * confidently parsing garbage like "you" into a "30 min you" block.
+ * The list was collected against whisper-1; gpt-transcribe shares the
+ * whisper training lineage, so the same guards stay (validated against
+ * silence/noise clips in scripts/stt-battery.sh).
  */
 const WHISPER_HALLUCINATIONS = new Set([
   "you", "thanks", "thank you", "thank you for watching",
@@ -747,35 +756,37 @@ export default async function handler(req, res) {
     }
     try {
       const audioFile = await toFile(audioBuffer, "audio.m4a", { type: "audio/m4a" });
-      const whisperRes = await getOpenAI().audio.transcriptions.create({
-        model: "whisper-1",
+      const sttRes = await getOpenAI().audio.transcriptions.create({
+        model: STT_MODEL,
         file: audioFile,
-        // Bias Whisper toward English so silence doesn't hallucinate
+        // Bias the STT model toward English so silence doesn't hallucinate
         // Chinese subscribe prompts / Japanese filler / etc.
         language: "en",
         // Vocabulary bias only — short keyword list, NO sentences. Whisper
-        // will regurgitate sentence-shaped prompts when fed silence/noise
+        // regurgitated sentence-shaped prompts when fed silence/noise
         // (observed in v1: the entire prompt came back as transcript). A
-        // bare keyword list biases toward our domain without giving Whisper
-        // something coherent to parrot.
+        // bare keyword list biases toward our domain without giving the
+        // model something coherent to parrot.
         prompt: WHISPER_BIAS_PROMPT,
       });
-      transcript = whisperRes.text;
+      transcript = sttRes.text;
     } catch (err) {
-      // Whisper returns BadRequestError (HTTP 400) when the audio is
-      // malformed, too short (< 0.1 s), or otherwise undecodable. This is
-      // common on simulator builds where the host audio HAL produces broken
-      // m4a files. Map it to the same "didn't catch that" UX as silence so
-      // iOS shows a sensible message instead of a generic 502.
+      // The transcriptions endpoint returns BadRequestError (HTTP 400) when
+      // the audio is malformed, too short (< 0.1 s), or otherwise
+      // undecodable. This is common on simulator builds where the host audio
+      // HAL produces broken m4a files. Map it to the same "didn't catch
+      // that" UX as silence so iOS shows a sensible message instead of a
+      // generic 502.
       const status = err?.status ?? err?.response?.status;
       const isBadAudio = status === 400
         || /audio|file|format|decode|short/i.test(err?.message ?? "");
-      console.error("Whisper error:", err);
+      console.error("STT error:", err);
       if (isBadAudio) {
         console.log(JSON.stringify({
           type: "intent_parse_rejected",
           ts: new Date().toISOString(),
-          reason: "whisper_bad_audio",
+          reason: "stt_bad_audio",
+          sttModel: STT_MODEL,
           status,
           message: err?.message,
           bytes: audioBuffer.length,
@@ -880,6 +891,7 @@ export default async function handler(req, res) {
     source: source ?? (text ? "text" : "voice"),
     app: app ?? "simplanner",
     model: MODEL,
+    sttModel: audio ? STT_MODEL : undefined,
     transcript,
     actionCount: actions.length,
     actions: actions.map((a) => ({

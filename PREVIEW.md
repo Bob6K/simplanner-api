@@ -1,5 +1,27 @@
 # Preview deployments
 
+## S37 — new model pipeline: gpt-transcribe + gpt-5.4-mini (`feat/model-bakeoff`)
+
+**Preview URL:** https://simplanner-b3ingmazj-bobwijs-3100s-projects.vercel.app
+**Endpoint:** `POST /api/intent`
+**Deployed:** 2026-08-12, via `vercel deploy -e INTENT_MODEL=gpt-5.4-mini` — production untouched (still whisper-1 + gpt-4o).
+
+The #36 migration build: STT switched to `gpt-transcribe` in code (env-overridable
+via `STT_MODEL`, rollback = `STT_MODEL=whisper-1`), intent model set to
+`gpt-5.4-mini` as deploy-time env, legacy `/api/voice` DELETED.
+
+Verified on this deployment (2026-08-12):
+- Text battery (`scripts/curl-battery.sh`): **11/11**, 21 s.
+- STT battery (`scripts/stt-battery.sh`, spoken clips through the full
+  voice pipeline): **13/13**, 32 s — incl. silence + noise clips rejected
+  422 by the hallucination guards.
+- Known STT edge (documented in `scripts/make-stt-clips.sh`): the Moira
+  synthetic voice's "Mornings aren't working" transcribes as "Mornings and
+  working" on gpt-transcribe (whisper-1 got it); other voices fine on both.
+
+**Next:** Bob device-tests voice against this preview → his GO → set
+`INTENT_MODEL=gpt-5.4-mini` in the Production env (STT flips with the merge).
+
 ## Stage 3 — querySchedule + replan-hint (`feat/query-replan`)
 
 **Preview URL:** https://simplanner-jtnhjno7v-bobwijs-3100s-projects.vercel.app
