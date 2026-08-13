@@ -645,6 +645,19 @@ const MODEL = process.env.INTENT_MODEL || "gpt-5.4-mini";
 // a code change.
 const STT_MODEL = process.env.STT_MODEL || "gpt-transcribe";
 
+// Privacy (S38 audit): what the user SAYS or TYPES is their content, and
+// stdout here lands in Vercel's log stream. Transcripts and tool args were
+// being logged verbatim on every single parse, which made the app's own
+// "we never store recordings" promise thin — the audio wasn't kept, but its
+// text was. Default is now metadata only (shape, not content); set
+// LOG_USER_CONTENT=1 in a PREVIEW deployment when you genuinely need
+// transcripts for prompt tuning. Never set it in production.
+const LOG_USER_CONTENT = process.env.LOG_USER_CONTENT === "1";
+
+/** Content when explicitly enabled, otherwise a size-only stand-in. */
+const safeText = (t) =>
+  LOG_USER_CONTENT ? t : `[redacted ${(t ?? "").length} chars]`;
+
 /**
  * Detect transcripts that aren't worth parsing — typically STT output when
  * fed silence or near-silence. Saves tokens AND prevents the AI from
@@ -812,7 +825,7 @@ export default async function handler(req, res) {
       type: "intent_parse_rejected",
       ts: new Date().toISOString(),
       reason: "empty_or_hallucination",
-      transcript,
+      transcript: safeText(transcript),
     }));
     return res.status(422).json({
       error: "Didn't catch that. Try speaking again or use text input.",
@@ -895,13 +908,15 @@ export default async function handler(req, res) {
     app: app ?? "simplanner",
     model: MODEL,
     sttModel: audio ? STT_MODEL : undefined,
-    transcript,
+    transcript: safeText(transcript),
     actionCount: actions.length,
     actions: actions.map((a) => ({
       tool:                 a.tool,
-      args:                 a.args,
+      // args/summary carry activity names the user chose or typed.
+      args:                 LOG_USER_CONTENT ? a.args : undefined,
+      argKeys:              Object.keys(a.args ?? {}),
       confidence:           a.confidence,
-      summary:              a.summary,
+      summary:              LOG_USER_CONTENT ? a.summary : undefined,
       assumptions:          a.assumptions,
       clarificationsNeeded: a.clarificationsNeeded,
     })),
