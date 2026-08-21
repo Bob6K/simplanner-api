@@ -276,6 +276,9 @@ Examples:
   "What's on my schedule today"        → querySchedule(scope="today")
   "What do I have going on today"      → querySchedule(scope="today")
   "What do I have on Thursday"         → querySchedule(scope="day", day="thursday")
+  "What did I get done this week"      → querySchedule(scope="week")
+  "How did my week go"                 → querySchedule(scope="week")
+  "How much did I do this week"        → querySchedule(scope="week")
   "What's on tomorrow"                 → querySchedule(scope="day", day="tomorrow")
   "When do I next have gym"            → querySchedule(scope="nextOccurrence", activityName="gym")
   "When's my next reading block"       → querySchedule(scope="nextOccurrence", activityName="reading")
@@ -285,13 +288,15 @@ Examples:
 SCOPE selection:
 - "today" — asking generally what's scheduled today; no other day named.
 - "day" — asking what's on a SPECIFIC named day other than an unqualified "today" (a weekday name, "tomorrow", or a calendar date like "the 24th" → resolve to an ISO date when unambiguous).
+- "week" — asking how the CURRENT week has gone AS A WHOLE: how much got done, on how many days, where the time went. Takes NO day and NO activityName. Use it whenever the user says "this week" / "my week" / "the week" about their own progress. Do NOT answer a week question with scope "day" + day "today" — that reports one day under a question about seven, which is worse than admitting the limit. Only the CURRENT week is supported: "last week", "last month", a named past month or any span that is not this week is NOT expressible — those stay notSupported.
 - "nextOccurrence" — asking WHEN an activity next happens. Requires activityName.
 - "freeSlot" — asking whether a stretch of time is open/available. Requires day; timePart is optional (omit for a whole-day free check).
+CONTEXT HINT: the request may carry a "hint" field in its Context. A hint of "weekly review" means the user opened this from the Sunday Wrap — a retrospective surface that has just shown them their week. There, a bare or ambiguous look-back ("how did it go", "what did I get done", "how was it") means THIS WEEK → scope "week". A question that names its own day or activity still wins over the hint: "what's on tomorrow" is scope "day" wherever it was typed.
 DAY field: a weekday name (monday..sunday), "today"/"tomorrow", or an ISO date (YYYY-MM-DD) — NOT the closed enum used by other tools, since users may name a specific calendar date. Omit for scope "today".
 Confidence "high" when scope + fields are unambiguous, "medium" when you had to infer the day or activity, "low" when genuinely guessing.
 
 ## notSupported
-Use when the user asks for something the assistant cannot do, INSTEAD of forcing another tool. Known unsupported: creating a routine from existing blocks ("save these as a routine" → ⋯ menu → Save as Routine), editing/renaming/deleting routines, schedules, activities or categories (→ Settings), changing settings/theme/planner mode, forever-recurrence beyond the current week, and any QUESTION the querySchedule schema cannot express — analytics/stats/history questions like "how productive was I in March", "what's my longest streak", "how many workouts did I do last month" — these stay notSupported with an honest reason; do not force querySchedule onto a question it can't structurally represent.
+Use when the user asks for something the assistant cannot do, INSTEAD of forcing another tool. Known unsupported: creating a routine from existing blocks ("save these as a routine" → ⋯ menu → Save as Routine), editing/renaming/deleting routines, schedules, activities or categories (→ Settings), changing settings/theme/planner mode, forever-recurrence beyond the current week, and any QUESTION the querySchedule schema cannot express — analytics/stats/history questions OUTSIDE the current week — "how productive was I in March", "what's my longest streak", "how many workouts did I do last month", "how did last week go" (only the CURRENT week is expressible, via scope "week") — these stay notSupported with an honest reason; do not force querySchedule onto a question it can't structurally represent.
   "Save these three blocks as a routine" → notSupported(requested: "save blocks as a routine", reason: "Creating a routine from existing blocks needs picking blocks by hand.", redirect: "Planner ⋯ menu → Save as Routine")
   "How productive was I in March"        → notSupported(requested: "productivity analysis for March", reason: "Voice/text can't analyze past history yet — only today's and upcoming schedule.", redirect: "Progress tab")
 Keep reason + redirect to one short sentence each, honest and specific. confidence "high" when the request is clearly unsupported.
@@ -597,7 +602,7 @@ const TOOLS = [
       parameters: {
         type: "object",
         properties: {
-          scope:        { type: "string", enum: ["today","day","nextOccurrence","freeSlot"], description: "'today' = what's on today (no other day named). 'day' = what's on a specific named day (weekday/tomorrow/ISO date). 'nextOccurrence' = when an activity next happens (requires activityName). 'freeSlot' = whether a stretch of time is open (requires day)." },
+          scope:        { type: "string", enum: ["today","day","week","nextOccurrence","freeSlot"], description: "'today' = what's on today (no other day named). 'day' = what's on a specific named day (weekday/tomorrow/ISO date). 'week' = how the CURRENT week has gone as a whole (how much got done, on how many days, where it went) — takes no day/activity. 'nextOccurrence' = when an activity next happens (requires activityName). 'freeSlot' = whether a stretch of time is open (requires day)." },
           day:          { type: "string", description: "Weekday name (monday..sunday), 'today'/'tomorrow', or an ISO date (YYYY-MM-DD) if the user named a specific calendar date. Omit for scope 'today'." },
           activityName: { type: "string", description: "The activity/routine name the user asked about, filler words stripped, e.g. 'gym', 'reading'. Required for scope 'nextOccurrence'." },
           timePart:     { type: "string", enum: ["morning","midday","evening","night"], description: "Optional part of day the user named, e.g. 'Thursday evening'. Used with scope 'freeSlot' or 'day'." },
