@@ -1,4 +1,5 @@
 import OpenAI, { toFile } from "openai";
+import crypto from "crypto";
 
 // Lazy-init so a missing OPENAI_API_KEY env var doesn't crash module load
 // (which would surface as Vercel FUNCTION_INVOCATION_FAILED 500 on every
@@ -650,6 +651,60 @@ const MODEL = process.env.INTENT_MODEL || "gpt-5.4-mini";
 // a code change.
 const STT_MODEL = process.env.STT_MODEL || "gpt-transcribe";
 
+// ---------------------------------------------------------------------------
+// AI fair-use meter (#59) — the €1.50 cap, enforced server-side with ZERO
+// server state. The client carries an HMAC-signed token {month, tenth-cents,
+// sig}; we verify, enforce, add this call's estimated cost, sign, and hand it
+// back. A client can't forge a lower count (no APP_SECRET); replaying an old
+// token is the only cheat and merely rewinds within the same month — accepted
+// at this scale. Absent/invalid/new-month token = fresh meter (resets
+// monthly, no carry-over — the FUP's published behavior).
+//
+// Ladder (per #59): under SOFT → full model · SOFT..HARD → eco model
+// ("cheaper but maybe worse") · at HARD → AI pauses until the monthly reset,
+// the manual planner is untouched. Costs are tracked in TENTHS OF A EURO
+// CENT (integers).
+const ECO_MODEL  = process.env.INTENT_ECO_MODEL || "gpt-5.4-nano";
+const METER_SOFT = parseInt(process.env.AI_CAP_SOFT_TENTHS || "1000", 10); // €1.00
+const METER_HARD = parseInt(process.env.AI_CAP_HARD_TENTHS || "1500", 10); // €1.50 (S53: cap ≤ yearly×0.70÷12)
+// Per-call estimates (S53 cost facts, rounded up): mini parse ≈ €0.0026,
+// nano ≈ €0.0007, STT ≈ €0.004/min. Estimates, not invoices — the cap
+// protects order-of-magnitude, not cents.
+const COST_PARSE_FULL   = 3; // tenth-cents
+const COST_PARSE_ECO    = 1;
+const COST_STT_PER_MIN  = 4;
+// m4a speech ≈ 240 KB/min at the recorder's settings — duration estimate
+// from byte length, clamped to at least a tenth of a minute.
+const STT_BYTES_PER_MIN = 240_000;
+
+function meterMonth() { return new Date().toISOString().slice(0, 7); }
+function meterSign(month, tenths) {
+  return crypto.createHmac("sha256", process.env.APP_SECRET)
+    .update(`${month}|${tenths}`).digest("hex").slice(0, 32);
+}
+function readMeter(header) {
+  const month = meterMonth();
+  try {
+    const t = JSON.parse(Buffer.from(String(header ?? ""), "base64").toString("utf8"));
+    if (t.m === month && Number.isInteger(t.c) && t.c >= 0 && t.s === meterSign(t.m, t.c)) {
+      return { month, tenths: t.c };
+    }
+  } catch {}
+  return { month, tenths: 0 };
+}
+function meterPayload(meter) {
+  return {
+    token: Buffer.from(JSON.stringify({
+      m: meter.month, c: meter.tenths, s: meterSign(meter.month, meter.tenths),
+    })).toString("base64"),
+    usedTenths: meter.tenths,
+    softTenths: METER_SOFT,
+    hardTenths: METER_HARD,
+    eco:    meter.tenths >= METER_SOFT,
+    paused: meter.tenths >= METER_HARD,
+  };
+}
+
 // Privacy (S38 audit): what the user SAYS or TYPES is their content, and
 // stdout here lands in Vercel's log stream. Transcripts and tool args were
 // being logged verbatim on every single parse, which made the app's own
@@ -748,6 +803,23 @@ export default async function handler(req, res) {
   const body = req.body ?? {};
   const { audio, text, source, app, context } = body;
 
+  // AI fair-use meter (#59): verify the client's signed token and enforce the
+  // hard cap BEFORE any AI spend. 429 carries the friendly copy + the meter —
+  // the client surfaces it as the fair-use pause, not a generic error.
+  const meter = readMeter(req.headers["x-vivana-meter"]);
+  if (meter.tenths >= METER_HARD) {
+    console.log(JSON.stringify({
+      type: "intent_meter_paused", ts: new Date().toISOString(), usedTenths: meter.tenths,
+    }));
+    return res.status(429).json({
+      meterPaused: true,
+      meter: meterPayload(meter),
+      error: "AI is taking a break until next month's reset — this month's fair-use allowance is used up. Planning by hand keeps working.",
+    });
+  }
+  const useEco = meter.tenths >= METER_SOFT;
+  let sttCostTenths = 0;
+
   // Resolve the user's input into a transcript.
   let transcript;
   if (typeof text === "string" && text.trim().length > 0) {
@@ -777,6 +849,9 @@ export default async function handler(req, res) {
     }
     try {
       const audioFile = await toFile(audioBuffer, "audio.m4a", { type: "audio/m4a" });
+      // Meter the STT by estimated duration — charged even if the parse below
+      // rejects the transcript (the spend happened either way).
+      sttCostTenths = Math.max(1, Math.round(audioBuffer.length / STT_BYTES_PER_MIN * COST_STT_PER_MIN));
       const sttRes = await getOpenAI().audio.transcriptions.create({
         model: STT_MODEL,
         file: audioFile,
@@ -832,9 +907,11 @@ export default async function handler(req, res) {
       reason: "empty_or_hallucination",
       transcript: safeText(transcript),
     }));
+    meter.tenths += sttCostTenths;
     return res.status(422).json({
       error: "Didn't catch that. Try speaking again or use text input.",
       rawTranscript: transcript,
+      meter: meterPayload(meter),
     });
   }
 
@@ -849,7 +926,9 @@ export default async function handler(req, res) {
   const actions = [];
   try {
     const chatRes = await getIntentClient().chat.completions.create({
-      model: MODEL,
+      // Soft threshold crossed → the eco model ("cheaper but maybe worse" —
+      // the FUP's published degradation, #59).
+      model: useEco ? ECO_MODEL : MODEL,
       tools: TOOLS,
       tool_choice: "required",
       temperature: 0,
@@ -911,8 +990,10 @@ export default async function handler(req, res) {
     ts:   new Date().toISOString(),
     source: source ?? (text ? "text" : "voice"),
     app: app ?? "simplanner",
-    model: MODEL,
+    model: useEco ? ECO_MODEL : MODEL,
     sttModel: audio ? STT_MODEL : undefined,
+    meterTenths: meter.tenths,
+    meterEco: useEco,
     transcript: safeText(transcript),
     actionCount: actions.length,
     actions: actions.map((a) => ({
@@ -927,10 +1008,13 @@ export default async function handler(req, res) {
     })),
   }));
 
+  meter.tenths += (useEco ? COST_PARSE_ECO : COST_PARSE_FULL) + sttCostTenths;
+
   const first = actions[0];
   return res.status(200).json({
     actions,
     rawTranscript: transcript,
+    meter: meterPayload(meter),
     // Backward-compat: pre-multiblock app builds read these flat top-level
     // fields (the first action). New builds read `actions`.
     tool:                 first.tool,
