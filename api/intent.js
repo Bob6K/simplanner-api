@@ -196,8 +196,8 @@ DAY (for addBlock):
 TIME PART (for addBlock):
 - "morning" / "early" / "before noon" / "breakfast" → "morning"
 - "afternoon" / "lunch" / "midday" / "noon" → "midday"
-- "evening" / "after work" / "after dinner" / "tonight" (early) → "evening"
-- "night" / "late" / "before bed" → "night"
+- "evening" / "after work" / "after dinner" / "tonight" → "evening"
+- "night" / "late" / "late tonight" / "before bed" → "night"
 - not mentioned → "morning"
 
 DURATION (for addBlock):
@@ -307,7 +307,12 @@ If the Context appended below includes a "hint" field (e.g. "replan: mornings la
 
 # Always include
 Every tool call MUST include:
-- summary: a human-readable single-line description shown to the user before execution (e.g. "Add 30 min reading — tomorrow morning")
+- summary: a short single-line description shown to the user before execution.
+    For addBlock and addBlocksForDays use EXACTLY this shape: "Add [Activity] [Today|Tomorrow|Weekday]"
+    with no duration and no time of day, e.g. "Add Reading Today", "Add Tennis Tuesday".
+    For several days, name them: "Add Yoga Monday, Wednesday and Friday".
+    For every other tool, describe the action naturally in one short sentence.
+    Never use an em dash in any summary.
 - confidence: "high" if the parse is unambiguous, "medium" if there's some inference, "low" if you're guessing or recurrence isn't supported
 - assumptions: array of arg names you INFERRED rather than took from the user's words. Examples:
     "Gym this evening" → assumptions: ["durationMinutes"]  (no duration was said)
