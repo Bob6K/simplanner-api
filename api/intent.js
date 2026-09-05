@@ -89,6 +89,11 @@ Examples:
   "I want to meditate for 15 minutes after work"       → addBlock(meditate, today, evening, 15)
   "Block out an hour of deep work tomorrow afternoon"  → addBlock(deep work, tomorrow, midday, 60)
 
+BARE ACTIVITY (S59): a word or short noun phrase that names an activity with NO verb and NO day/time ("Tai chi session", "yoga", "call mum", "reading", "20 min walk") is an addBlock, NEVER notSupported — the user is naming something they want in their planner and expects the app to ask for the rest. Fill day="today", timePart=the most sensible part of the day for that activity, durationMinutes=30 (5 for meds/supplements, 15 for a call), and list EVERY defaulted field in assumptions AND in clarificationsNeeded so the confirm sheet asks the user for day, time and duration. confidence "medium". Strip qualifier words the app does not need ("session", "practice", "training" stay in the activity name — do not invent, do not drop).
+  "Tai chi session"  → addBlock(tai chi session, today, morning, 30), assumptions: ["day","timePart","durationMinutes"], clarificationsNeeded: ["day","timePart","durationMinutes"]
+  "Call mum"         → addBlock(call mum, today, evening, 15), assumptions: ["day","timePart","durationMinutes"], clarificationsNeeded: ["day","timePart","durationMinutes"]
+  "20 min walk"      → addBlock(walk, today, morning, 20), assumptions: ["day","timePart"], clarificationsNeeded: ["day","timePart"]
+
 ## addBlocksForDays
 Use when the user wants the SAME block on a FIXED SET of weekdays — e.g. "every weekday", "on Mon/Wed/Fri", "weekends", a listed group of days. Each weekday in the array produces one block on the next occurrence of that day.
 Examples:
@@ -301,6 +306,7 @@ Use when the user asks for something the assistant cannot do, INSTEAD of forcing
   "Save these three blocks as a routine" → notSupported(requested: "save blocks as a routine", reason: "Creating a routine from existing blocks needs picking blocks by hand.", redirect: "Planner ⋯ menu → Save as Routine")
   "How productive was I in March"        → notSupported(requested: "productivity analysis for March", reason: "Voice/text can't analyze past history yet — only today's and upcoming schedule.", redirect: "Progress tab")
 Keep reason + redirect to one short sentence each, honest and specific. confidence "high" when the request is clearly unsupported.
+NEVER use notSupported for a bare activity name or phrase ("Tai chi session", "yoga", "call mum") — that is an addBlock with day/time/duration in assumptions + clarificationsNeeded (see BARE ACTIVITY under addBlock). notSupported is for actions the app cannot perform, not for missing details.
 
 # Context hint (replanning conversations)
 If the Context appended below includes a "hint" field (e.g. "replan: mornings lapsed for Meditation"), the utterance is part of a replanning conversation ABOUT the named activity/timePart in that hint — prefer moveBlock, changeBlockDuration, or deleteBlock over addBlock, and resolve vague phrasing like "mornings aren't working" or "let's try evenings instead" as a move/adjust/delete action on that activity rather than creating a new block. Still use querySchedule if the utterance is a genuine question rather than a decision, and notSupported/addBlock etc. when the utterance clearly isn't about the hinted activity.
@@ -324,6 +330,7 @@ Every tool call MUST include:
   Examples:
     "Remind me about the dentist later" → clarificationsNeeded: ["timePart", "durationMinutes"]
     "Gym this evening" → clarificationsNeeded: []  (duration was assumed but 30 min is a fine default)
+    "Reading" (bare activity, nothing else said) → clarificationsNeeded: ["day", "timePart", "durationMinutes"]
 
 When you emit MULTIPLE tool calls, compute summary / confidence / assumptions / clarificationsNeeded SEPARATELY for each call, from only that call's own arguments — never write a combined summary on the first call and leave the others sparse.
 
@@ -771,11 +778,12 @@ function isWhisperBiasEcho(transcript) {
   }
   return false;
 }
-function isLikelyEmptyOrHallucination(transcript) {
+function isLikelyEmptyOrHallucination(transcript, { typed = false } = {}) {
   const t = normaliseTranscript(transcript);
   if (t.length === 0) return true;
-  // Single short token, no spaces — usually a filler artefact.
-  if (!t.includes(" ") && t.length <= 4) return true;
+  // Single short token, no spaces — usually a filler artefact. Whisper-only:
+  // a TYPED "Gym" / "Yoga" / "Nap" is a real bare-activity request (S59).
+  if (!typed && !t.includes(" ") && t.length <= 4) return true;
   if (WHISPER_HALLUCINATIONS.has(t)) return true;
   for (const frag of PARTIAL_HALLUCINATION_FRAGMENTS) {
     if (t.includes(frag)) return true;
@@ -905,7 +913,7 @@ export default async function handler(req, res) {
   // Reject obvious Whisper hallucinations / silence / single-word artefacts
   // before spending tokens on the parse. Whisper often outputs filler words
   // when fed silence: "you", "thanks for watching", ".", etc.
-  if (isLikelyEmptyOrHallucination(transcript)) {
+  if (isLikelyEmptyOrHallucination(transcript, { typed: typeof text === "string" && text.trim().length > 0 })) {
     console.log(JSON.stringify({
       type: "intent_parse_rejected",
       ts: new Date().toISOString(),
